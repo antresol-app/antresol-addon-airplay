@@ -1,0 +1,27 @@
+{
+  "id": "airplay",
+  "name": {
+    "ru": "Колонки дома",
+    "en": "Home speakers"
+  },
+  "description": {
+    "ru": "«Воспроизвести на…»: музыка и аудиокниги на колонках AirPlay и Chromecast домашней сети, на одной или на нескольких сразу",
+    "en": "«Play on…»: music and audiobooks on the AirPlay and Chromecast speakers of the home network, one or several at once"
+  },
+  "version": "0.1.0",
+  "author": "Antresol",
+  "homepage": "",
+  "contract": 1,
+  "platforms": {},
+  "access": "adults",
+  "helpers": [
+    {
+      "name": "owntone",
+      "image": "owntone/owntone:29.3",
+      "port": 3689,
+      "health": "/api/config"
+    }
+  ],
+  "permissions": [],
+  "hooks": ["helpers.status"]
+}
