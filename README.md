@@ -79,11 +79,14 @@ Known constraints, found on a real rehearsal:
   (with the media key). Set `trusted_networks = { "localhost" }` with an
   `admin_password` (give the addon `ANTRESOL_AIRPLAY_OWNTONE_PASSWORD`), or
   `bind_address`, in `owntone.conf`.
-- **Where OwnTone fetches the stream.** The URLs carry the browser's own
-  address. A browser on `localhost`, or outside the home network (the
+- **Where OwnTone fetches the stream.** By default the address the server
+  says the browser reached it at; a host named in the queue is never used.
+  The server must tell it: the release's `minCore` is the first version
+  that does. A browser on `localhost`, or outside the home network (the
   public address: the server may then cap the bitrate and seeking stops
   working), is not what OwnTone should use: set
-  `ANTRESOL_AIRPLAY_STREAM_URL` to the server's address on the home network.
+  `ANTRESOL_AIRPLAY_STREAM_URL` to the server's address on the home network
+  (it also pins the address whatever a request says).
 - **Multiroom** is OwnTone's: AirPlay 2 speakers stay in sync, AirPlay 1 and
   Chromecast ones may drift slightly.
 

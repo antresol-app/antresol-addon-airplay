@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -211,6 +212,8 @@ func call(t *testing.T, srv *httptest.Server, uid, method, path string, body any
 	}
 	req, _ := http.NewRequest(method, srv.URL+path, rd)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "http") // what the core adds to every request it proxies
+	req.Header.Set("X-Forwarded-Host", "lan:8420")
 	if uid != "" {
 		req.Header.Set("X-Antresol-User", fmt.Sprintf(`{"id":1,"uid":%q,"name":"P-%s","isAdmin":true,"isKid":false,"lang":"ru"}`, uid, uid))
 	}
@@ -232,6 +235,7 @@ func call(t *testing.T, srv *httptest.Server, uid, method, path string, body any
 }
 
 func TestCheckRefusesForeignURLs(t *testing.T) {
+	base, _ := url.Parse("http://lan:8420")
 	for _, u := range []string{
 		"http://lan/api/tracks/1/stream",              // no media key
 		"http://lan/api/images/x?mk=K",                // not an audio stream
@@ -241,12 +245,12 @@ func TestCheckRefusesForeignURLs(t *testing.T) {
 		"http://lan/api/tracks/../../x?mk=K",
 	} {
 		s := Snapshot{Items: []Item{{Key: "a", URL: u}}}
-		if err := s.Check(nil); err == nil {
+		if err := s.Check(base); err == nil {
 			t.Errorf("%s: taken", u)
 		}
 	}
 	s := Snapshot{Items: []Item{{Key: "a", URL: "http://localhost:5173/api/audio/7?mk=K", Title: "x\x00y"}}}
-	base, _ := url.Parse("http://192.0.2.1:8420/root")
+	base, _ = url.Parse("http://192.0.2.1:8420/root")
 	if err := s.Check(base); err != nil {
 		t.Fatal(err)
 	}
@@ -257,8 +261,77 @@ func TestCheckRefusesForeignURLs(t *testing.T) {
 		t.Errorf("title %q", s.Items[0].Title)
 	}
 	dup := Snapshot{Items: []Item{{Key: "a", URL: "http://l/api/audio/1?mk=K"}, {Key: "a", URL: "http://l/api/audio/2?mk=K"}}}
-	if dup.Check(nil) == nil {
+	if dup.Check(base) == nil {
 		t.Error("a repeated key taken")
+	}
+	// no address to build on: nothing is taken, whatever the URLs name
+	ok := Snapshot{Items: []Item{{Key: "a", URL: "http://l/api/audio/1?mk=K"}}}
+	if err := ok.Check(nil); !errors.Is(err, ErrBadSnapshot) {
+		t.Errorf("without a base: %v", err)
+	}
+}
+
+// postSession sends a one-track queue whose URL names host, with the
+// forwarded address headers given (nil: none), and returns the status.
+func postSession(t *testing.T, srv *httptest.Server, host string, fwd map[string]string) int {
+	t.Helper()
+	body, _ := json.Marshal(map[string]any{"snapshot": Snapshot{Items: []Item{{Key: "a", URL: "http://" + host + "/api/audio/1?mk=K", Title: "x"}}}})
+	req, _ := http.NewRequest("POST", srv.URL+"/api/session", strings.NewReader(string(body)))
+	req.Header.Set("X-Antresol-User", `{"id":1,"uid":"u1","name":"P","isAdmin":true,"isKid":false,"lang":"ru"}`)
+	for k, v := range fwd {
+		req.Header.Set(k, v)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	return resp.StatusCode
+}
+
+// The stream address comes from what the core says the browser reached it
+// at, never from the host a queue's URL names (ADD-16).
+func TestStreamAddressIsTheServersNotTheQueues(t *testing.T) {
+	f, a, srv := setup(t)
+	// the queue names another host on the LAN; the core said "lan:8420"
+	if code := postSession(t, srv, "192.0.2.77:9000", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "lan:8420"}); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if got := f.uris(); len(got) != 1 || got[0] != "https://lan:8420/api/audio/1?mk=K" {
+		t.Fatalf("OwnTone was told %v", got)
+	}
+	// the admin's STREAM_URL wins over the forwarded address
+	a.streamBase, _ = url.Parse("http://owntone-side:8420")
+	if code := postSession(t, srv, "192.0.2.77:9000", map[string]string{"X-Forwarded-Proto": "https", "X-Forwarded-Host": "lan:8420"}); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if got := f.uris(); len(got) != 1 || got[0] != "http://owntone-side:8420/api/audio/1?mk=K" {
+		t.Fatalf("OwnTone was told %v", got)
+	}
+}
+
+// Without a usable forwarded address (an older core, a hand-made request)
+// and without STREAM_URL the queue is refused: the addon never falls back
+// to the URL's own host.
+func TestNoServerAddressNoSession(t *testing.T) {
+	f, _, srv := setup(t)
+	for name, fwd := range map[string]map[string]string{
+		"none":         nil,
+		"no host":      {"X-Forwarded-Proto": "http"},
+		"no proto":     {"X-Forwarded-Host": "lan:8420"},
+		"odd proto":    {"X-Forwarded-Proto": "file", "X-Forwarded-Host": "lan:8420"},
+		"a path":       {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "lan:8420/x"},
+		"userinfo":     {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "u@lan:8420"},
+		"a list":       {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "lan:8420,evil"},
+		"a backslash":  {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "lan\\x"},
+		"a space":      {"X-Forwarded-Proto": "http", "X-Forwarded-Host": "lan :8420"},
+	} {
+		if code := postSession(t, srv, "lan:8420", fwd); code != 400 {
+			t.Errorf("%s: status %d, want 400", name, code)
+		}
+	}
+	if got := f.uris(); len(got) != 0 {
+		t.Errorf("OwnTone was told %v", got)
 	}
 }
 

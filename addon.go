@@ -179,7 +179,12 @@ func newHandler(a *addon, ready *addonkit.Ready) http.Handler {
 		if !decodeLimit(w, r, &body, 8<<20) {
 			return
 		}
-		if err := body.Snapshot.Check(a.streamBase); err != nil {
+		base := a.serverBase(r)
+		if base == nil {
+			addonkit.WriteError(w, http.StatusBadRequest, "Сервер не сообщил свой адрес: обновите сервер или задайте ANTRESOL_AIRPLAY_STREAM_URL")
+			return
+		}
+		if err := body.Snapshot.Check(base); err != nil {
 			addonkit.WriteError(w, http.StatusBadRequest, "Очередь не подходит для колонок")
 			return
 		}
@@ -238,6 +243,28 @@ func newHandler(a *addon, ready *addonkit.Ready) http.Handler {
 }
 
 var errBadRequest = errors.New("bad request")
+
+// serverBase is the address OwnTone fetches the streams at: the admin's
+// ANTRESOL_AIRPLAY_STREAM_URL, else the address the server says the browser
+// reached it at (the core sets X-Forwarded-Proto and X-Forwarded-Host
+// itself on every request it proxies, whatever the client sent). nil when
+// it says nothing usable: a stream is never fetched from a host a client
+// named in the queue.
+func (a *addon) serverBase(r *http.Request) *url.URL {
+	if a.streamBase != nil {
+		return a.streamBase
+	}
+	proto, host := r.Header.Get("X-Forwarded-Proto"), r.Header.Get("X-Forwarded-Host")
+	if proto != "http" && proto != "https" {
+		return nil
+	}
+	u, err := url.Parse(proto + "://" + host)
+	if err != nil || host == "" || u.Host != host || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" ||
+		strings.ContainsAny(host, "\\ ,") {
+		return nil
+	}
+	return &url.URL{Scheme: proto, Host: host}
+}
 
 // withUser: every route is a profile's (the server sends adults only: access "adults").
 func (a *addon) withUser(h func(http.ResponseWriter, *http.Request, addonkit.User)) http.HandlerFunc {

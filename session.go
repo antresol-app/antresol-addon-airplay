@@ -58,9 +58,13 @@ type Snapshot struct {
 // ErrBadSnapshot: a queue the addon does not take.
 var ErrBadSnapshot = errors.New("bad queue")
 
-// Check validates s and rewrites its URLs onto streamBase when set (the
-// address OwnTone reaches the server at, when the browser's is not).
-func (s *Snapshot) Check(streamBase *url.URL) error {
+// Check validates s and rewrites its URLs onto base, the address OwnTone
+// reaches the server at (the host a URL names is never used: the browser
+// chose it). Without a base nothing is taken.
+func (s *Snapshot) Check(base *url.URL) error {
+	if base == nil {
+		return fmt.Errorf("%w: no server address", ErrBadSnapshot)
+	}
 	if len(s.Items) == 0 || len(s.Items) > MaxItems || s.Index < 0 || s.Index >= len(s.Items) {
 		return fmt.Errorf("%w: items", ErrBadSnapshot)
 	}
@@ -79,7 +83,7 @@ func (s *Snapshot) Check(streamBase *url.URL) error {
 			return fmt.Errorf("%w: key", ErrBadSnapshot)
 		}
 		keys[it.Key] = true
-		u, err := streamURL(it.URL, streamBase)
+		u, err := streamURL(it.URL, base)
 		if err != nil {
 			return err
 		}
@@ -90,7 +94,8 @@ func (s *Snapshot) Check(streamBase *url.URL) error {
 }
 
 // streamURL accepts only the server's own audio streams with a media key
-// (OwnTone fetches nothing else on the addon's word), rewritten onto base.
+// (OwnTone fetches nothing else on the addon's word), rewritten onto base:
+// its scheme, host and path prefix replace the URL's.
 func streamURL(raw string, base *url.URL) (string, error) {
 	if len(raw) > maxURLLen || strings.Contains(raw, ",") {
 		return "", fmt.Errorf("%w: url", ErrBadSnapshot)
@@ -105,10 +110,8 @@ func streamURL(raw string, base *url.URL) (string, error) {
 	if u.Query().Get("mk") == "" {
 		return "", fmt.Errorf("%w: url without a media key", ErrBadSnapshot)
 	}
-	if base != nil {
-		u.Scheme, u.Host = base.Scheme, base.Host
-		u.Path = strings.TrimSuffix(base.Path, "/") + u.Path
-	}
+	u.Scheme, u.Host = base.Scheme, base.Host
+	u.Path = strings.TrimSuffix(base.Path, "/") + u.Path
 	return u.String(), nil
 }
 

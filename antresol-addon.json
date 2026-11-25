@@ -8,10 +8,11 @@
     "ru": "«Воспроизвести на…»: музыка и аудиокниги на колонках AirPlay и Chromecast домашней сети, на одной или на нескольких сразу",
     "en": "«Play on…»: music and audiobooks on the AirPlay and Chromecast speakers of the home network, one or several at once"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Antresol",
   "homepage": "",
   "contract": 1,
+  "minCore": "0.8.30",
   "platforms": {},
   "access": "adults",
   "helpers": [

@@ -10,7 +10,8 @@
 //                     the host: see find.go)
 //   OWNTONE_PASSWORD  OwnTone's admin_password, when it asks one
 //   STREAM_URL        the server's address as OwnTone reaches it (default:
-//                     the address the browser uses)
+//                     the address the server says the browser used:
+//                     X-Forwarded-Host and -Proto, set by the core)
 package main
 
 import (
