@@ -14,7 +14,7 @@ export function Settings() {
   }, [t])
   return (
     <section className={styles.picker}>
-      <h1 style={{ font: 'var(--t-large-title)', margin: 0 }}>{t('settings.title')}</h1>
+      <h1 className={styles.title}>{t('settings.title')}</h1>
       {failed && <ui.Notice tone="destructive">{failed}</ui.Notice>}
       {st && (st.ready ? <ui.Notice tone="accent">{t('settings.found', { n: st.outputs.length })}</ui.Notice> : <ui.Notice tone="warning">{t('settings.missing')}</ui.Notice>)}
       <p className={styles.note}>{t('settings.how')}</p>

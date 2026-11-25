@@ -180,6 +180,7 @@ type session struct {
 	// seekMs: a position to go to at the next play (the queue was loaded paused)
 	seekMs int64
 	last   Status
+	lastAt time.Time // when last was made
 	ended  bool
 }
 
@@ -193,6 +194,10 @@ type Speakers struct {
 	sess *session
 	// wait between the player's checks after a start (tests make it short)
 	poll time.Duration
+	// fresh: how long Status serves what the last refresh found (Run
+	// refreshes every second, so a browser's poll costs OwnTone nothing);
+	// 0: every Status asks OwnTone
+	fresh time.Duration
 }
 
 // ErrNoOwnTone: no OwnTone found.
@@ -235,9 +240,11 @@ func (sp *Speakers) Sync(ctx context.Context, uid, name string, snap Snapshot, j
 			s = &session{id: newID(), ownerUID: uid, ownerName: name}
 		}
 		s.snap, s.ended = snap, false
+		s.lastAt = time.Time{}
 		sp.sess = s
 		return s.id, sp.load(ctx, o, s, snap.Index, int64(snap.PositionSec*1000), snap.Playing)
 	}
+	s.lastAt = time.Time{} // the queue changed: the next Status asks OwnTone
 	return s.id, sp.reconcile(ctx, o, s, snap)
 }
 
@@ -390,7 +397,9 @@ func (sp *Speakers) reconcile(ctx context.Context, o *OwnTone, s *session, snap 
 func (sp *Speakers) Refresh(ctx context.Context) {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
-	if s := sp.sess; s != nil {
+	// the queue played out and the speakers are silent: nothing moves on
+	// until someone plays or stops (Play and Stop do not wait for this)
+	if s := sp.sess; s != nil && !(s.ended && s.last.State == "stop") {
 		if o, err := sp.owntone(); err == nil {
 			if err := sp.refresh(ctx, o, s); err != nil {
 				log.Printf("airplay: refresh: %v", err)
@@ -441,13 +450,19 @@ func (sp *Speakers) refresh(ctx context.Context, o *OwnTone, s *session) error {
 		st.PositionMs = s.seekMs
 	}
 	st.Ended = s.ended
-	s.last = st
+	s.last, s.lastAt = st, time.Now()
 	return nil
 }
 
-// Status is the session as uid sees it (refreshed first).
+// Status is the session as uid sees it (refreshed first, unless the last
+// refresh is younger than fresh).
 func (sp *Speakers) Status(ctx context.Context, uid string) Status {
-	sp.Refresh(ctx)
+	sp.mu.Lock()
+	stale := sp.sess == nil || sp.fresh <= 0 || time.Since(sp.sess.lastAt) >= sp.fresh
+	sp.mu.Unlock()
+	if stale {
+		sp.Refresh(ctx)
+	}
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 	s := sp.sess
@@ -471,6 +486,7 @@ func (sp *Speakers) mine(ctx context.Context, uid, id string, fn func(o *OwnTone
 	if err != nil {
 		return err
 	}
+	s.lastAt = time.Time{} // the next Status asks OwnTone: a command changes what it says
 	return fn(o, s)
 }
 

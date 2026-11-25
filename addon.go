@@ -71,7 +71,10 @@ type addon struct {
 	streamBase *url.URL
 }
 
-var outputID = regexp.MustCompile(`^[0-9A-Za-z_-]{1,40}$`)
+var (
+	outputID = regexp.MustCompile(`^[0-9A-Za-z_-]{1,40}$`)
+	pinCode  = regexp.MustCompile(`^[0-9]{4}$`)
+)
 
 const callTimeout = 40 * time.Second
 
@@ -158,7 +161,7 @@ func newHandler(a *addon, ready *addonkit.Ready) http.Handler {
 		if !outputID.MatchString(id) || !decode(w, r, &body) {
 			return
 		}
-		if !regexp.MustCompile(`^[0-9]{4}$`).MatchString(body.Pin) {
+		if !pinCode.MatchString(body.Pin) {
 			addonkit.WriteError(w, http.StatusBadRequest, "Нужен код из четырёх цифр")
 			return
 		}
@@ -312,6 +315,7 @@ func composeBlock(h addonkit.Helper) string {
 	return "  " + h.Name + ":\n" +
 		"    image: " + h.Image + "\n" +
 		"    restart: unless-stopped\n" +
+		"    mem_limit: 512m\n" +
 		"    # OwnTone finds the speakers over mDNS: the host's network, not the project's\n" +
 		"    network_mode: host\n" +
 		"    volumes:\n" +

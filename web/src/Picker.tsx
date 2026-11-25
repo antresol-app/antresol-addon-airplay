@@ -3,7 +3,7 @@
 // circle on each, and a volume slider in the row of each speaker that
 // plays. Several ticked play together (multiroom). A speaker that asks for
 // a PIN (a HomePod or an Apple TV pairing) gets the code field under it.
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Icon, ui, useAddonT, useNowPlaying, useUser, type IconName } from '@antresol/addon-sdk'
 import { api, ID, speakers, type Status } from './remote'
 import styles from './Picker.module.css'
@@ -215,17 +215,7 @@ export function Picker({ onClose }: { onClose: () => void }) {
                     </span>
                   </button>
                   {o.selected && (
-                    <input
-                      className={styles.volume}
-                      type="range"
-                      min={0}
-                      max={100}
-                      step={1}
-                      value={o.volume}
-                      aria-label={t('picker.volume', { name: o.name })}
-                      style={{ '--fill': `${o.volume}%` } as CSSProperties}
-                      onChange={(e) => setVolume(o, Number(e.target.value))}
-                    />
+                    <ui.Slider className={styles.volume} min={0} max={100} step={1} value={o.volume} label={t('picker.volume', { name: o.name })} onChange={(v) => setVolume(o, v)} />
                   )}
                   <button type="button" className={styles.tickButton} aria-hidden tabIndex={-1} disabled={!now} onClick={() => void toggle(o)}>
                     <Tick on={o.selected} busy={busy === o.id} />

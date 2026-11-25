@@ -82,7 +82,7 @@ func fromEnv(env addonkit.Env, h addonkit.Helper) (*addon, error) {
 			return nil, errors.New("ANTRESOL_AIRPLAY_OWNTONE_URL: not an http(s) address")
 		}
 	}
-	a := &addon{finder: f, helper: h, speakers: &Speakers{ot: f.OwnTone}}
+	a := &addon{finder: f, helper: h, speakers: &Speakers{ot: f.OwnTone, fresh: time.Second}}
 	if s := env.Var("STREAM_URL"); s != "" {
 		u, err := url.Parse(s)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.RawQuery != "" {

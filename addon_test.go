@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -467,7 +468,7 @@ func TestNoOwnTone(t *testing.T) {
 	code, body := call(t, srv, "u1", "GET", "/api/state", nil)
 	var st State
 	json.Unmarshal(body, &st)
-	if code != 200 || st.Ready || !strings.Contains(st.Compose, "network_mode: host") {
+	if code != 200 || st.Ready || !strings.Contains(st.Compose, "network_mode: host") || !strings.Contains(st.Compose, "mem_limit:") {
 		t.Errorf("%d %+v", code, st)
 	}
 	if code, _ := call(t, srv, "u1", "POST", "/api/session", map[string]any{"snapshot": Snapshot{Items: items(1)}, "jump": true}); code != 503 {
@@ -479,5 +480,140 @@ func TestManifestHelper(t *testing.T) {
 	hs, err := addonkit.HelpersFromManifest(manifest)
 	if err != nil || len(hs) != 1 || hs[0].Name != "owntone" {
 		t.Fatalf("%v %+v", err, hs)
+	}
+}
+
+// playerCalls counts the asks of OwnTone's player so far.
+func (f *fakeOwnTone) playerCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c == "GET /api/player" {
+			n++
+		}
+	}
+	return n
+}
+
+// The browser polls Status every second: within `fresh` of the last
+// refresh it is answered from it, OwnTone is not asked.
+func TestStatusServedFromTheLastRefresh(t *testing.T) {
+	f, a, _ := setup(t)
+	ctx := context.Background()
+	if _, err := a.speakers.Sync(ctx, "u1", "P", Snapshot{Items: items(3), Index: 0, Playing: true}, true); err != nil {
+		t.Fatal(err)
+	}
+	a.speakers.fresh = time.Hour
+	base := f.playerCalls()
+	for i := 0; i < 5; i++ {
+		if st := a.speakers.Status(ctx, "u1"); !st.Mine || st.State != "play" {
+			t.Fatalf("status %+v", st)
+		}
+	}
+	if n := f.playerCalls() - base; n != 1 {
+		t.Fatalf("OwnTone asked %d times by 5 polls, want 1 (the first, there was no refresh yet)", n)
+	}
+	a.speakers.fresh = 0 // as the tests of the window need: every ask goes through
+	base = f.playerCalls()
+	a.speakers.Status(ctx, "u1")
+	a.speakers.Status(ctx, "u1")
+	if n := f.playerCalls() - base; n != 2 {
+		t.Fatalf("OwnTone asked %d times, want 2", n)
+	}
+}
+
+// Once the queue has played out and the speakers are silent, the tick and
+// the polls leave OwnTone alone until someone plays or stops.
+func TestEndedSessionIsNotRefreshed(t *testing.T) {
+	f, a, _ := setup(t)
+	ctx := context.Background()
+	if _, err := a.speakers.Sync(ctx, "u1", "P", Snapshot{Items: items(1), Index: 0, Playing: true}, true); err != nil {
+		t.Fatal(err)
+	}
+	a.speakers.Refresh(ctx)
+	f.advance() // the only item ends
+	if st := a.speakers.Status(ctx, "u1"); !st.Ended {
+		t.Fatalf("end not seen: %+v", st)
+	}
+	base := f.playerCalls()
+	for i := 0; i < 3; i++ {
+		a.speakers.Refresh(ctx)
+		a.speakers.Status(ctx, "u1")
+	}
+	if n := f.playerCalls() - base; n != 0 {
+		t.Fatalf("an ended session asked OwnTone %d times", n)
+	}
+	// playing again wakes it
+	if err := a.speakers.Play(ctx, "u1", ""); err != nil {
+		t.Fatal(err)
+	}
+	if st := a.speakers.Status(ctx, "u1"); st.Ended || st.State != "play" {
+		t.Fatalf("after play: %+v", st)
+	}
+}
+
+// Probes asked together are one probe: a picker that polls an OwnTone that
+// is not there does not start one per poll.
+func TestProbesAreCoalesced(t *testing.T) {
+	var asks atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asks.Add(1)
+		time.Sleep(300 * time.Millisecond)
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	fd := &Finder{Candidates: []string{srv.URL}}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fd.Probe(context.Background()); err == nil {
+				t.Error("a probe of nothing succeeded")
+			}
+		}()
+	}
+	wg.Wait()
+	if n := asks.Load(); n != 1 {
+		t.Fatalf("%d asks by 8 probes, want 1", n)
+	}
+	// a probe after it is a new one
+	if err := fd.Probe(context.Background()); err == nil || asks.Load() != 2 {
+		t.Fatalf("second round: %v, %d asks", err, asks.Load())
+	}
+}
+
+// A command makes the next Status ask OwnTone: the browser that sent a
+// pause, a seek or a volume does not get the state from before it back.
+func TestStatusAfterACommandIsFresh(t *testing.T) {
+	_, a, srv := setup(t)
+	ctx := context.Background()
+	id, err := a.speakers.Sync(ctx, "u1", "P", Snapshot{Items: items(3), Index: 0, Playing: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.speakers.fresh = time.Hour
+	if st := a.speakers.Status(ctx, "u1"); st.State != "play" {
+		t.Fatalf("status %+v", st)
+	}
+	if code, b := call(t, srv, "u1", "POST", "/api/session/pause", map[string]any{"session": id}); code != 204 {
+		t.Fatalf("%d %s", code, b)
+	}
+	if st := a.speakers.Status(ctx, "u1"); st.State != "pause" {
+		t.Fatalf("after pause: %+v", st)
+	}
+	if code, b := call(t, srv, "u1", "POST", "/api/session/volume", map[string]any{"session": id, "volume": 7}); code != 204 {
+		t.Fatalf("%d %s", code, b)
+	}
+	if st := a.speakers.Status(ctx, "u1"); st.Volume != 7 {
+		t.Fatalf("after volume: %+v", st)
+	}
+	// a jump to another item: the key is the new one at once
+	if _, err := a.speakers.Sync(ctx, "u1", "P", Snapshot{Items: items(3), Index: 2, Playing: true}, true); err != nil {
+		t.Fatal(err)
+	}
+	if st := a.speakers.Status(ctx, "u1"); st.Key != "t2" {
+		t.Fatalf("after a jump: %+v", st)
 	}
 }

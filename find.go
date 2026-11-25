@@ -31,8 +31,9 @@ type Finder struct {
 	HTTP       *http.Client
 	Health     addonkit.HelperHealth
 
-	mu    sync.Mutex
-	found string
+	mu     sync.Mutex
+	found  string
+	flight *probeFlight // the probe in progress
 }
 
 func (f *Finder) client() *http.Client {
@@ -42,8 +43,45 @@ func (f *Finder) client() *http.Client {
 	return &http.Client{Timeout: 15 * time.Second}
 }
 
+// probeBudget bounds one probe of all the addresses.
+const probeBudget = 20 * time.Second
+
+// probeFlight is a probe in progress.
+type probeFlight struct {
+	done chan struct{}
+	err  error
+}
+
 // Probe tries the addresses and keeps the first that answers as OwnTone.
+// Probes asked while one runs wait for its answer (a picker polling an
+// OwnTone that is not there must not start one probe per poll).
 func (f *Finder) Probe(ctx context.Context) error {
+	f.mu.Lock()
+	fl := f.flight
+	if fl == nil {
+		fl = &probeFlight{done: make(chan struct{})}
+		f.flight = fl
+		// the flight outlives the caller that started it
+		go func() {
+			pctx, cancel := context.WithTimeout(context.Background(), probeBudget)
+			defer cancel()
+			fl.err = f.probe(pctx)
+			f.mu.Lock()
+			f.flight = nil
+			f.mu.Unlock()
+			close(fl.done)
+		}()
+	}
+	f.mu.Unlock()
+	select {
+	case <-fl.done:
+		return fl.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (f *Finder) probe(ctx context.Context) error {
 	list := f.Candidates
 	if f.Override != "" {
 		list = []string{f.Override}

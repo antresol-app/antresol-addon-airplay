@@ -6,6 +6,11 @@
   gap: var(--s-2);
   text-align: start;
 }
+/* the settings page's title */
+.title {
+  margin: 0;
+  font: var(--t-large-title);
+}
 .now {
   display: flex;
   gap: var(--s-3);
@@ -98,7 +103,6 @@
 .volume {
   flex: 0 1 120px;
   min-width: 72px;
-  accent-color: var(--accent);
 }
 .tickButton {
   padding: 0;
